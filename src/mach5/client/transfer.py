@@ -23,7 +23,7 @@ def create_sharing(endpoint: str, enrollment_token: str, summary: str) -> str:
         sharing_id = json.loads(response.read())["id"]
     return endpoint.rstrip("/") + f"/s/{sharing_id}#v1.{summary}"
 
-async def sender(url: str, sharing: str, source: Path, approval: str) -> None:
+async def sender(url: str, sharing: str, source: Path, approval: str | None) -> None:
     entries, _, digest = scan(source); index = {e.path: e for e in entries}
     hs = Handshake.create()
     async with websockets.connect(f"{url.rstrip('/')}/{sharing}/sender", max_size=2*1024*1024) as ws:
@@ -31,6 +31,7 @@ async def sender(url: str, sharing: str, source: Path, approval: str) -> None:
         async for frame in ws:
             if isinstance(frame, str) and frame.startswith("hello:"):
                 key, code = hs.derive(base64.urlsafe_b64decode(frame[6:])); print(f"Receiver confirmation code: {code}")
+                if approval is None: approval = input("Enter the receiver code to approve: ").replace(" ", "")
                 if approval != code: raise RuntimeError("approval code did not match receiver")
                 await ws.send("approve:" + code); break
         s2r, r2s = Channel(key, b"s2r"), Channel(key, b"r2s")
@@ -76,7 +77,7 @@ async def receiver(url: str, sharing: str, destination: Path) -> None:
 def main() -> None:
     p=argparse.ArgumentParser(); sub=p.add_subparsers(required=True, dest="cmd"); s=sub.add_parser("send"); r=sub.add_parser("receive"); c=sub.add_parser("create")
     for q in (s,r): q.add_argument("--relay", required=True); q.add_argument("--sharing", required=True)
-    s.add_argument("--source", type=Path, required=True); s.add_argument("--approve", required=True); r.add_argument("--destination", type=Path, required=True)
+    s.add_argument("--source", type=Path, required=True); s.add_argument("--approve"); r.add_argument("--destination", type=Path, required=True)
     c.add_argument("--source", type=Path, required=True); c.add_argument("--endpoint", required=True)
     a=p.parse_args()
     if a.cmd == "create":
