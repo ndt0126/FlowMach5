@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Private, resumable one-way directory transfer"
 requires-python = ">=3.11"
 dependencies = [
+  "certifi>=2025.1.31",
   "cryptography>=44,<47",
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.30,<1",

@@ -1,16 +1,18 @@
 """Command-line encrypted sender/receiver transport over the Mach5 relay."""
 from __future__ import annotations
-import argparse, asyncio, base64, json, os
+import argparse, asyncio, base64, json, os, ssl
 from dataclasses import asdict
 from pathlib import Path
 from urllib.request import Request, urlopen
 import websockets
+import certifi
 from mach5.client.receiver import Receiver
 from mach5.filesystem.manifest import CHUNK_SIZE, Entry, scan
 from mach5.security.channel import Channel, Handshake
 
 def pack(value: dict) -> bytes: return json.dumps(value, separators=(",", ":")).encode()
 def unpack(value: bytes) -> dict: return json.loads(value)
+def tls_context() -> ssl.SSLContext: return ssl.create_default_context(cafile=certifi.where())
 
 def create_sharing(endpoint: str, enrollment_token: str, summary: str) -> str:
     """Create an opaque relay record and return a pasteable invitation URL.
@@ -26,7 +28,7 @@ def create_sharing(endpoint: str, enrollment_token: str, summary: str) -> str:
 async def sender(url: str, sharing: str, source: Path, approval: str | None) -> None:
     entries, _, digest = scan(source); index = {e.path: e for e in entries}
     hs = Handshake.create()
-    async with websockets.connect(f"{url.rstrip('/')}/{sharing}/sender", max_size=2*1024*1024) as ws:
+    async with websockets.connect(f"{url.rstrip('/')}/{sharing}/sender", max_size=2*1024*1024, ssl=tls_context()) as ws:
         await ws.send("hello:" + base64.urlsafe_b64encode(hs.public()).decode())
         async for frame in ws:
             if isinstance(frame, str) and frame.startswith("hello:"):
@@ -51,7 +53,7 @@ async def sender(url: str, sharing: str, source: Path, approval: str | None) -> 
 
 async def receiver(url: str, sharing: str, destination: Path) -> None:
     hs = Handshake.create()
-    async with websockets.connect(f"{url.rstrip('/')}/{sharing}/receiver", max_size=2*1024*1024) as ws:
+    async with websockets.connect(f"{url.rstrip('/')}/{sharing}/receiver", max_size=2*1024*1024, ssl=tls_context()) as ws:
         await ws.send("hello:" + base64.urlsafe_b64encode(hs.public()).decode())
         async for frame in ws:
             if isinstance(frame, str) and frame.startswith("hello:"):
