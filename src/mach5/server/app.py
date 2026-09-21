@@ -21,11 +21,16 @@ MAX_FRAME = 2 * 1024 * 1024
 EXPIRY_SECONDS = 24 * 60 * 60
 
 @dataclass
+class Peer:
+    socket: WebSocket
+    outgoing: asyncio.Queue[bytes | str] = field(default_factory=lambda: asyncio.Queue(maxsize=16))
+
+@dataclass
 class Sharing:
     token: str
     expires_at: float
-    sender: WebSocket | None = None
-    receiver: WebSocket | None = None
+    sender: Peer | None = None
+    receiver: Peer | None = None
     approval_code: str | None = None
     approved: bool = False
     hellos: dict[str, str] = field(default_factory=dict)
@@ -68,10 +73,19 @@ async def relay(websocket: WebSocket, sharing_id: str, role: ROLE) -> None:
     except HTTPException: await websocket.close(1008); return
     await websocket.accept()
     if getattr(item, role) is not None: await websocket.close(1008); return
-    setattr(item, role, websocket)
+    current = Peer(websocket)
+    setattr(item, role, current)
     peer = item.receiver if role == "sender" else item.sender
     other_role = "receiver" if role == "sender" else "sender"
-    if peer and other_role in item.hellos: await websocket.send_text(item.hellos[other_role])
+    if peer and other_role in item.hellos: await current.outgoing.put(item.hellos[other_role])
+
+    async def send_frames() -> None:
+        while True:
+            data = await current.outgoing.get()
+            if isinstance(data, bytes): await websocket.send_bytes(data)
+            else: await websocket.send_text(data)
+
+    sender_task = asyncio.create_task(send_frames())
     try:
         while True:
             message = await websocket.receive()
@@ -81,23 +95,26 @@ async def relay(websocket: WebSocket, sharing_id: str, role: ROLE) -> None:
             if role == "sender" and isinstance(data, str) and data.startswith("approve:"):
                 if len(data) == 14 and data[8:].isdigit():
                     item.approved = True
-                    if item.receiver: await item.receiver.send_text("approved")
+                    if item.receiver: await item.receiver.outgoing.put("approved")
                 continue
             peer = item.receiver if role == "sender" else item.sender
             # Public keys are harmless but must be bounded; all later frames are E2E encrypted.
             handshake = isinstance(data, str) and data.startswith("hello:") and len(data) <= 128
             if handshake: item.hellos[role] = data
             if peer and (item.approved or handshake):
-                if isinstance(data, bytes): await peer.send_bytes(data)
-                else: await peer.send_text(data)
+                await peer.outgoing.put(data)
     except WebSocketDisconnect: pass
     finally:
-        if getattr(item, role) is websocket: setattr(item, role, None)
+        sender_task.cancel()
+        try: await sender_task
+        except asyncio.CancelledError: pass
+        if getattr(item, role) is current: setattr(item, role, None)
 
 def main() -> None:
     import uvicorn
     parser = argparse.ArgumentParser(); parser.add_argument("--host", default="127.0.0.1"); parser.add_argument("--port", type=int, default=8751)
-    args = parser.parse_args(); uvicorn.run(app, host=args.host, port=args.port)
+    args = parser.parse_args()
+    uvicorn.run(app, host=args.host, port=args.port, ws_max_size=MAX_FRAME, ws_ping_interval=60, ws_ping_timeout=60)
 
 if __name__ == "__main__":
     main()

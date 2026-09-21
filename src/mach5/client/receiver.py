@@ -42,6 +42,12 @@ class Receiver:
             os.pwrite(fd, data, offset); os.fsync(fd)
         finally: os.close(fd)
 
+    def read_chunk(self, path: str, offset: int, length: int) -> bytes:
+        """Read a bounded chunk from a verified source path without blocking asyncio."""
+        with path.open("rb") as source:
+            source.seek(offset)
+            return source.read(length)
+
     def finalize(self, path: str) -> None:
         row = self.db.execute("SELECT size,sha256,verified FROM files WHERE path=?", (path,)).fetchone()
         if not row or row[2]: return

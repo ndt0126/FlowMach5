@@ -44,16 +44,15 @@ async def sender(url: str, sharing: str, source: Path, approval: str | None) -> 
                 entry = index.get(request["path"])
                 if not entry or entry.kind != "file": raise RuntimeError("invalid receiver request")
                 path = source / entry.path if source.is_dir() else source
-                with path.open("rb") as f:
-                    offset = 0
-                    while block := f.read(CHUNK_SIZE):
-                        print(f"Sending {entry.path}: {offset + len(block):,}/{entry.size:,} bytes", flush=True)
-                        await ws.send(s2r.seal(pack({"t":"chunk","p":entry.path,"o":offset,"d":base64.b64encode(block).decode()})))
-                        ack = unpack(r2s.open(await ws.recv()))
-                        if ack != {"t": "ack", "p": entry.path, "o": offset}:
-                            raise RuntimeError("invalid receiver acknowledgement")
-                        print(f"Verified {entry.path}: {offset + len(block):,}/{entry.size:,} bytes", flush=True)
-                        offset += len(block)
+                offset = 0
+                while block := await asyncio.to_thread(_read_chunk, path, offset, CHUNK_SIZE):
+                    print(f"Sending {entry.path}: {offset + len(block):,}/{entry.size:,} bytes", flush=True)
+                    await ws.send(s2r.seal(pack({"t":"chunk","p":entry.path,"o":offset,"d":base64.b64encode(block).decode()})))
+                    ack = unpack(r2s.open(await ws.recv()))
+                    if ack != {"t": "ack", "p": entry.path, "o": offset}:
+                        raise RuntimeError("invalid receiver acknowledgement")
+                    print(f"Verified {entry.path}: {offset + len(block):,}/{entry.size:,} bytes", flush=True)
+                    offset += len(block)
                 await ws.send(s2r.seal(pack({"t":"end","p":entry.path})))
             elif request["t"] == "done": return
 
@@ -77,13 +76,19 @@ async def receiver(url: str, sharing: str, destination: Path) -> None:
                 while True:
                     event = unpack(s2r.open(await ws.recv()))
                     if event["t"] == "chunk":
-                        receive.write_chunk(event["p"], event["o"], base64.b64decode(event["d"]))
+                        data = base64.b64decode(event["d"])
+                        await asyncio.to_thread(receive.write_chunk, event["p"], event["o"], data)
                         await ws.send(r2s.seal(pack({"t":"ack", "p":event["p"], "o":event["o"]})))
-                        print(f"Received {event['p']}: {event['o'] + len(base64.b64decode(event['d'])):,} bytes", flush=True)
+                        print(f"Received {event['p']}: {event['o'] + len(data):,} bytes", flush=True)
                     elif event["t"] == "end": receive.finalize(event["p"]); break
             if not receive.complete(): raise RuntimeError("transfer incomplete")
             await ws.send(r2s.seal(pack({"t":"done"})))
         finally: receive.close()
+
+def _read_chunk(path: Path, offset: int, length: int) -> bytes:
+    with path.open("rb") as source:
+        source.seek(offset)
+        return source.read(length)
 
 def main() -> None:
     p=argparse.ArgumentParser(); sub=p.add_subparsers(required=True, dest="cmd"); s=sub.add_parser("send"); r=sub.add_parser("receive"); c=sub.add_parser("create")
