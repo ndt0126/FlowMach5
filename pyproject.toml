@@ -16,6 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
+mach5-croc = "mach5.client.croc:main"
 mach5-client = "mach5.client.app:main"
 mach5-server = "mach5.server.app:main"
 
