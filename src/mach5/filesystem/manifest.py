@@ -9,7 +9,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterator
 
-CHUNK_SIZE = 1024 * 1024
+# Each encrypted relay message must stay comfortably below intermediary limits.
+# The sender waits for an acknowledgement after every chunk, so this bounds the
+# amount of unverified data held by either peer.
+CHUNK_SIZE = 256 * 1024
 RESERVED_DIRECTORY = ".foldertransfer"
 
 

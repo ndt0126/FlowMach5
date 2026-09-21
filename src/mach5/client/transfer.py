@@ -38,8 +38,8 @@ async def sender(url: str, sharing: str, source: Path, approval: str | None) -> 
                 await ws.send("approve:" + code); break
         s2r, r2s = Channel(key, b"s2r"), Channel(key, b"r2s")
         await ws.send(s2r.seal(pack({"t":"manifest", "id":digest, "entries":[asdict(e) for e in entries], "wrapper":source.name})))
-        async for frame in ws:
-            request = unpack(r2s.open(frame))
+        while True:
+            request = unpack(r2s.open(await ws.recv()))
             if request["t"] == "get":
                 entry = index.get(request["path"])
                 if not entry or entry.kind != "file": raise RuntimeError("invalid receiver request")
@@ -47,7 +47,11 @@ async def sender(url: str, sharing: str, source: Path, approval: str | None) -> 
                 with path.open("rb") as f:
                     offset = 0
                     while block := f.read(CHUNK_SIZE):
-                        await ws.send(s2r.seal(pack({"t":"chunk","p":entry.path,"o":offset,"d":base64.b64encode(block).decode()}))); offset += len(block)
+                        await ws.send(s2r.seal(pack({"t":"chunk","p":entry.path,"o":offset,"d":base64.b64encode(block).decode()})))
+                        ack = unpack(r2s.open(await ws.recv()))
+                        if ack != {"t": "ack", "p": entry.path, "o": offset}:
+                            raise RuntimeError("invalid receiver acknowledgement")
+                        offset += len(block)
                 await ws.send(s2r.seal(pack({"t":"end","p":entry.path})))
             elif request["t"] == "done": return
 
@@ -70,7 +74,9 @@ async def receiver(url: str, sharing: str, destination: Path) -> None:
                 await ws.send(r2s.seal(pack({"t":"get", "path":entry.path})))
                 while True:
                     event = unpack(s2r.open(await ws.recv()))
-                    if event["t"] == "chunk": receive.write_chunk(event["p"], event["o"], base64.b64decode(event["d"]))
+                    if event["t"] == "chunk":
+                        receive.write_chunk(event["p"], event["o"], base64.b64decode(event["d"]))
+                        await ws.send(r2s.seal(pack({"t":"ack", "p":event["p"], "o":event["o"]})))
                     elif event["t"] == "end": receive.finalize(event["p"]); break
             if not receive.complete(): raise RuntimeError("transfer incomplete")
             await ws.send(r2s.seal(pack({"t":"done"})))
