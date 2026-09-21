@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 
 ROLE = Literal["sender", "receiver"]
 MAX_FRAME = 2 * 1024 * 1024
@@ -45,6 +46,12 @@ app = FastAPI(title="Mach5 relay", docs_url=None, redoc_url=None)
 
 @app.get("/health")
 def health() -> dict[str, str]: return {"status": "ok", "protocol": "1"}
+
+@app.get("/s/{sharing_id}", response_class=HTMLResponse)
+def invitation_page(sharing_id: str) -> str:
+    # Deliberately does not inspect the fragment: browsers never send it here.
+    registry.get(sharing_id)
+    return """<!doctype html><meta charset=utf-8><title>Mach5 invitation</title><h1>Mach5 invitation</h1><p>Start Mach5 on the receiving computer, then paste this invitation into its Receive screen. This prototype does not install or launch an application automatically.</p>"""
 
 @app.post("/v1/sharings")
 def create_sharing(authorization: str | None = Header(default=None)) -> dict[str, object]:

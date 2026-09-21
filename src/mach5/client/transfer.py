@@ -1,8 +1,9 @@
 """Command-line encrypted sender/receiver transport over the Mach5 relay."""
 from __future__ import annotations
-import argparse, asyncio, base64, json
+import argparse, asyncio, base64, json, os
 from dataclasses import asdict
 from pathlib import Path
+from urllib.request import Request, urlopen
 import websockets
 from mach5.client.receiver import Receiver
 from mach5.filesystem.manifest import CHUNK_SIZE, Entry, scan
@@ -10,6 +11,17 @@ from mach5.security.channel import Channel, Handshake
 
 def pack(value: dict) -> bytes: return json.dumps(value, separators=(",", ":")).encode()
 def unpack(value: bytes) -> dict: return json.loads(value)
+
+def create_sharing(endpoint: str, enrollment_token: str, summary: str) -> str:
+    """Create an opaque relay record and return a pasteable invitation URL.
+
+    The path summary lives in the fragment, so normal HTTP requests and proxy
+    logs receive neither it nor any future invitation key material.
+    """
+    request = Request(endpoint.rstrip("/") + "/v1/sharings", method="POST", headers={"Authorization": f"Bearer {enrollment_token}"})
+    with urlopen(request, timeout=15) as response:
+        sharing_id = json.loads(response.read())["id"]
+    return endpoint.rstrip("/") + f"/s/{sharing_id}#v1.{summary}"
 
 async def sender(url: str, sharing: str, source: Path, approval: str) -> None:
     entries, _, digest = scan(source); index = {e.path: e for e in entries}
@@ -62,9 +74,15 @@ async def receiver(url: str, sharing: str, destination: Path) -> None:
         finally: receive.close()
 
 def main() -> None:
-    p=argparse.ArgumentParser(); sub=p.add_subparsers(required=True, dest="cmd"); s=sub.add_parser("send"); r=sub.add_parser("receive")
+    p=argparse.ArgumentParser(); sub=p.add_subparsers(required=True, dest="cmd"); s=sub.add_parser("send"); r=sub.add_parser("receive"); c=sub.add_parser("create")
     for q in (s,r): q.add_argument("--relay", required=True); q.add_argument("--sharing", required=True)
     s.add_argument("--source", type=Path, required=True); s.add_argument("--approve", required=True); r.add_argument("--destination", type=Path, required=True)
-    a=p.parse_args(); asyncio.run(sender(a.relay,a.sharing,a.source,a.approve) if a.cmd=="send" else receiver(a.relay,a.sharing,a.destination))
+    c.add_argument("--source", type=Path, required=True); c.add_argument("--endpoint", required=True)
+    a=p.parse_args()
+    if a.cmd == "create":
+        token = os.environ.get("MACH5_ENROLLMENT_TOKEN")
+        if not token: p.error("MACH5_ENROLLMENT_TOKEN must be set locally to create a sharing")
+        _, summary, _ = scan(a.source); print(create_sharing(a.endpoint, token, summary.encode())); return
+    asyncio.run(sender(a.relay,a.sharing,a.source,a.approve) if a.cmd=="send" else receiver(a.relay,a.sharing,a.destination))
 
 if __name__ == "__main__": main()

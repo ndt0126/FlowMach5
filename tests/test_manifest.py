@@ -4,6 +4,7 @@ from mach5.filesystem.destination import validate_destination
 from mach5.filesystem.manifest import Entry, ManifestError, PathSummary, scan, validate_relative_path
 from mach5.client.receiver import Receiver
 from mach5.security.channel import Channel, Handshake
+from mach5.client.transfer import create_sharing
 
 def test_summary_roundtrip_and_unicode(tmp_path: Path):
     (tmp_path / "é😀.txt").write_text("x")
@@ -35,3 +36,12 @@ def test_confirmed_encrypted_channel():
     assert left_key == right_key and left_code == right_code
     sealed = Channel(left_key, b"sender-to-receiver").seal(b"private manifest")
     assert Channel(right_key, b"sender-to-receiver").open(sealed) == b"private manifest"
+
+def test_invitation_keeps_summary_in_fragment(monkeypatch):
+    class Reply:
+        def read(self): return b'{"id":"opaque"}'
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+    monkeypatch.setattr("mach5.client.transfer.urlopen", lambda request, timeout: Reply())
+    link = create_sharing("https://relay.example", "not-in-link", "summary")
+    assert link == "https://relay.example/s/opaque#v1.summary" and "not-in-link" not in link
