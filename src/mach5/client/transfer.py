@@ -1,0 +1,70 @@
+"""Command-line encrypted sender/receiver transport over the Mach5 relay."""
+from __future__ import annotations
+import argparse, asyncio, base64, json
+from dataclasses import asdict
+from pathlib import Path
+import websockets
+from mach5.client.receiver import Receiver
+from mach5.filesystem.manifest import CHUNK_SIZE, Entry, scan
+from mach5.security.channel import Channel, Handshake
+
+def pack(value: dict) -> bytes: return json.dumps(value, separators=(",", ":")).encode()
+def unpack(value: bytes) -> dict: return json.loads(value)
+
+async def sender(url: str, sharing: str, source: Path, approval: str) -> None:
+    entries, _, digest = scan(source); index = {e.path: e for e in entries}
+    hs = Handshake.create()
+    async with websockets.connect(f"{url.rstrip('/')}/{sharing}/sender", max_size=2*1024*1024) as ws:
+        await ws.send("hello:" + base64.urlsafe_b64encode(hs.public()).decode())
+        async for frame in ws:
+            if isinstance(frame, str) and frame.startswith("hello:"):
+                key, code = hs.derive(base64.urlsafe_b64decode(frame[6:])); print(f"Receiver confirmation code: {code}")
+                if approval != code: raise RuntimeError("approval code did not match receiver")
+                await ws.send("approve:" + code); break
+        s2r, r2s = Channel(key, b"s2r"), Channel(key, b"r2s")
+        await ws.send(s2r.seal(pack({"t":"manifest", "id":digest, "entries":[asdict(e) for e in entries], "wrapper":source.name})))
+        async for frame in ws:
+            request = unpack(r2s.open(frame))
+            if request["t"] == "get":
+                entry = index.get(request["path"])
+                if not entry or entry.kind != "file": raise RuntimeError("invalid receiver request")
+                path = source / entry.path if source.is_dir() else source
+                with path.open("rb") as f:
+                    offset = 0
+                    while block := f.read(CHUNK_SIZE):
+                        await ws.send(s2r.seal(pack({"t":"chunk","p":entry.path,"o":offset,"d":base64.b64encode(block).decode()}))); offset += len(block)
+                await ws.send(s2r.seal(pack({"t":"end","p":entry.path})))
+            elif request["t"] == "done": return
+
+async def receiver(url: str, sharing: str, destination: Path) -> None:
+    hs = Handshake.create()
+    async with websockets.connect(f"{url.rstrip('/')}/{sharing}/receiver", max_size=2*1024*1024) as ws:
+        await ws.send("hello:" + base64.urlsafe_b64encode(hs.public()).decode())
+        async for frame in ws:
+            if isinstance(frame, str) and frame.startswith("hello:"):
+                key, code = hs.derive(base64.urlsafe_b64decode(frame[6:])); print(f"Enter this code on sender: {code}"); break
+        s2r, r2s = Channel(key, b"s2r"), Channel(key, b"r2s")
+        while True:
+            frame = await ws.recv()
+            if frame == "approved": break
+        manifest = unpack(s2r.open(await ws.recv()))
+        entries = [Entry(**e) for e in manifest["entries"]]; receive = Receiver(destination, manifest["wrapper"], entries, manifest["id"])
+        try:
+            for entry in entries:
+                if entry.kind != "file": continue
+                await ws.send(r2s.seal(pack({"t":"get", "path":entry.path})))
+                while True:
+                    event = unpack(s2r.open(await ws.recv()))
+                    if event["t"] == "chunk": receive.write_chunk(event["p"], event["o"], base64.b64decode(event["d"]))
+                    elif event["t"] == "end": receive.finalize(event["p"]); break
+            if not receive.complete(): raise RuntimeError("transfer incomplete")
+            await ws.send(r2s.seal(pack({"t":"done"})))
+        finally: receive.close()
+
+def main() -> None:
+    p=argparse.ArgumentParser(); sub=p.add_subparsers(required=True, dest="cmd"); s=sub.add_parser("send"); r=sub.add_parser("receive")
+    for q in (s,r): q.add_argument("--relay", required=True); q.add_argument("--sharing", required=True)
+    s.add_argument("--source", type=Path, required=True); s.add_argument("--approve", required=True); r.add_argument("--destination", type=Path, required=True)
+    a=p.parse_args(); asyncio.run(sender(a.relay,a.sharing,a.source,a.approve) if a.cmd=="send" else receiver(a.relay,a.sharing,a.destination))
+
+if __name__ == "__main__": main()

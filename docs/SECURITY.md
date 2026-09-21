@@ -1,17 +1,19 @@
 # Security status
 
-This repository currently supplies a bounded, TLS-protected blind relay and
-local asynchronous source scanning. The relay accepts one sender and one
-receiver per opaque sharing ID; a receiver gets a six-digit out-of-band code,
-which the sender must approve. IDs have 256 bits of random entropy and expire
-after 24 hours. New sharing creation needs a provisioned enrollment token.
+This repository supplies a bounded, TLS-protected blind relay and local
+asynchronous source scanning. The relay accepts one sender and one receiver
+per opaque sharing ID. Each endpoint generates an ephemeral X25519 key, derives
+a session key through HKDF, and displays a six-digit out-of-band confirmation
+derived from that shared secret. The sender must enter that exact receiver code
+before the relay forwards encrypted frames. IDs have 256 bits of random entropy
+and expire after 24 hours. New sharing creation needs a provisioned enrollment
+token.
 
-This is **not yet an end-to-end encrypted file transfer implementation**.
-Payload frames are relayed after pairing, but client-side authenticated key
-exchange, encrypted framing, durable receiver state, chunk recovery, and
-revocation remain to be implemented. The short code is confirmation only, not
-a cryptographic key. Do not use the prototype for sensitive files until an
-audited PAKE or authenticated X25519 out-of-band design is integrated.
+Payload frames use ChaCha20-Poly1305 and the relay cannot read the manifest or
+file bytes. The short code is confirmation only, not a cryptographic key.
+This remains a prototype: its custom pairing protocol has not received an
+independent security audit, and robust reconnect/revocation semantics are not
+complete. Do not use it for sensitive files yet.
 
 Scanning follows no symlinks and rejects special files. It hashes files while
 checking size/mtime stability. Python cannot provide an OS-enforced guarantee

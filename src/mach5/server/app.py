@@ -27,6 +27,7 @@ class Sharing:
     receiver: WebSocket | None = None
     approval_code: str | None = None
     approved: bool = False
+    hellos: dict[str, str] = field(default_factory=dict)
 
 class Registry:
     def __init__(self) -> None: self.items: dict[str, Sharing] = {}
@@ -61,22 +62,25 @@ async def relay(websocket: WebSocket, sharing_id: str, role: ROLE) -> None:
     await websocket.accept()
     if getattr(item, role) is not None: await websocket.close(1008); return
     setattr(item, role, websocket)
+    peer = item.receiver if role == "sender" else item.sender
+    other_role = "receiver" if role == "sender" else "sender"
+    if peer and other_role in item.hellos: await websocket.send_text(item.hellos[other_role])
     try:
-        if role == "receiver":
-            item.approval_code = f"{secrets.randbelow(1_000_000):06d}"
-            if item.sender: await item.sender.send_json({"type": "receiver_waiting", "code": item.approval_code})
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect": break
             data = message.get("bytes") or message.get("text", "")
             if len(data) > MAX_FRAME: await websocket.close(1009); break
             if role == "sender" and isinstance(data, str) and data.startswith("approve:"):
-                if item.approval_code and secrets.compare_digest(data[8:], item.approval_code):
+                if len(data) == 14 and data[8:].isdigit():
                     item.approved = True
                     if item.receiver: await item.receiver.send_text("approved")
                 continue
             peer = item.receiver if role == "sender" else item.sender
-            if item.approved and peer:
+            # Public keys are harmless but must be bounded; all later frames are E2E encrypted.
+            handshake = isinstance(data, str) and data.startswith("hello:") and len(data) <= 128
+            if handshake: item.hellos[role] = data
+            if peer and (item.approved or handshake):
                 if isinstance(data, bytes): await peer.send_bytes(data)
                 else: await peer.send_text(data)
     except WebSocketDisconnect: pass

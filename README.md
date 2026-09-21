@@ -5,12 +5,12 @@ runs on loopback, so closing the browser does not end its Python process.
 
 ## Current implementation status
 
-Phase A foundation is implemented: asynchronous bounded source scans, stable
-SHA-256 manifests, explicit empty directories, Unicode path summaries,
-unsafe-path validation, a loopback controller, and a bounded blind relay
-rendezvous service. The working native picker, browser drag-and-drop spike,
-receiver SQLite state/resume, end-to-end encrypted data plane, and completed
-internet transfer engine are not implemented yet. The browser UI therefore
+The prototype includes asynchronous bounded source scans, stable SHA-256
+manifests, explicit empty directories, Unicode path summaries, unsafe-path
+validation, durable receiver state, encrypted relay frames, and a
+command-line sender/receiver transfer path. The native picker,
+browser drag-and-drop, link-creation UI, reconnecting sender state, and
+cross-platform validation are still outstanding. The browser UI therefore
 uses an explicit path field and must not be presented as seamless drag/drop.
 
 ## Development
