@@ -1,0 +1,7 @@
+MISSION.md
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+mach5-state/
