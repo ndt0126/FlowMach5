@@ -30,6 +30,13 @@ def test_receiver_durable_partial_and_integrity(tmp_path: Path):
     receiver.write_chunk(entry.path, 20, data[20:]); receiver.finalize(entry.path)
     assert receiver.complete() and (tmp_path / "received/nested/file.bin").read_bytes() == data
 
+def test_receiver_finalizes_zero_byte_file(tmp_path: Path):
+    import hashlib
+    entry = Entry("empty.txt", "file", 0, hashlib.sha256(b"").hexdigest())
+    receiver = Receiver(tmp_path, "received", [entry], "manifest-zero")
+    receiver.finalize(entry.path)
+    assert receiver.complete() and (tmp_path / "received/empty.txt").read_bytes() == b""
+
 def test_confirmed_encrypted_channel():
     left, right = Handshake.create(), Handshake.create()
     left_key, left_code = left.derive(right.public()); right_key, right_code = right.derive(left.public())

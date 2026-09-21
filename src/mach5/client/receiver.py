@@ -52,6 +52,12 @@ class Receiver:
         row = self.db.execute("SELECT size,sha256,verified FROM files WHERE path=?", (path,)).fetchone()
         if not row or row[2]: return
         partial = self.partials / hashlib.sha256(path.encode()).hexdigest()
+        if row[0] == 0 and not partial.exists():
+            # A zero-byte file has no data chunk, but still needs the same
+            # durable-finalization path as every other file.
+            fd = os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try: os.fsync(fd)
+            finally: os.close(fd)
         if not partial.exists() or partial.stat().st_size != row[0]: raise ManifestError("partial size incomplete")
         digest = hashlib.sha256()
         with partial.open("rb") as source:
